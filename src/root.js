@@ -53,7 +53,8 @@ Gun.dup = require('./dup');
 			return;
 		}
 		dup.track(tmp);
-		if(!at.ask(msg['@'], msg)){
+		if(tmp = msg['@']){ dup.track(tmp) } // HNPERF: Bump original request's liveliness.
+		if(!at.ask(tmp, msg)){
 			if(msg.get){
 				Gun.on.get(msg, gun); //at.on('get', get(msg));
 			}
@@ -72,18 +73,21 @@ Gun.dup = require('./dup');
 ;(function(){
 	Gun.on.put = function(msg, gun){
 		var at = gun._, ctx = {$: gun, graph: at.graph, put: {}, map: {}, souls: {}, machine: Gun.state(), ack: msg['@'], cat: at, stop: {}};
+		if(!Gun.obj.map(msg.put, perf, ctx)){ return } // HNPERF: performance test, not core code, do not port.
 		if(!Gun.graph.is(msg.put, null, verify, ctx)){ ctx.err = "Error: Invalid graph!" }
 		if(ctx.err){ return at.on('in', {'@': msg['#'], err: Gun.log(ctx.err) }) }
 		obj_map(ctx.put, merge, ctx);
 		if(!ctx.async){ obj_map(ctx.map, map, ctx) }
 		if(u !== ctx.defer){
+			var to = ctx.defer - ctx.machine;
 			setTimeout(function(){
 				Gun.on.put(msg, gun);
-			}, ctx.defer - ctx.machine);
+			}, to > MD? MD : to ); // setTimeout Max Defer 32bit :(
 		}
 		if(!ctx.diff){ return }
 		at.on('put', obj_to(msg, {put: ctx.diff}));
 	};
+	var MD = 2147483647;
 	function verify(val, key, node, soul){ var ctx = this;
 		var state = Gun.state.is(node, key), tmp;
 		if(!state){ return ctx.err = "Error: No state on '"+key+"' in node '"+soul+"'!" }
@@ -149,10 +153,12 @@ Gun.dup = require('./dup');
 		(msg.$._).on('in', msg);
 		this.cat.stop = null; // temporary fix till a better solution?
 	}
+	function perf(node, soul){ if(node !== this.graph[soul]){ return true } } // HNPERF: do not port!
 
 	Gun.on.get = function(msg, gun){
 		var root = gun._, get = msg.get, soul = get[_soul], node = root.graph[soul], has = get[_has], tmp;
 		var next = root.next || (root.next = {}), at = next[soul];
+		// queue concurrent GETs?
 		if(!node){ return root.on('get', msg) }
 		if(has){
 			if('string' != typeof has || !obj_has(node, has)){ return root.on('get', msg) }
@@ -161,15 +167,17 @@ Gun.dup = require('./dup');
 			// Maybe... in case the in-memory key we have is a local write
 			// we still need to trigger a pull/merge from peers.
 		} else {
-			node = Gun.obj.copy(node);
+			node = Gun.window? Gun.obj.copy(node) : node; // HNPERF: If !browser bump Performance? Is this too dangerous to reference root graph? Copy / shallow copy too expensive for big nodes. Gun.obj.to(node); // 1 layer deep copy // Gun.obj.copy(node); // too slow on big nodes
 		}
 		node = Gun.graph.node(node);
 		tmp = (at||empty).ack;
+		var faith = function(){}; faith.faith = true; // HNPERF: We're testing performance improvement by skipping going through security again, but this should be audited.
 		root.on('in', {
 			'@': msg['#'],
 			how: 'mem',
 			put: node,
-			$: gun
+			$: gun,
+			_: faith
 		});
 		//if(0 < tmp){ return }
 		root.on('get', msg);
@@ -185,13 +193,17 @@ Gun.dup = require('./dup');
 		if(text_is(tmp)){ tmp = [tmp] }
 		if(list_is(tmp)){
 			tmp = obj_map(tmp, function(url, i, map){
-				map(url, {url: url});
+				i = {}; i.id = i.url = url; map(url, i);
 			});
 			if(!obj_is(at.opt.peers)){ at.opt.peers = {}}
 			at.opt.peers = obj_to(tmp, at.opt.peers);
 		}
 		at.opt.peers = at.opt.peers || {};
-		obj_to(opt, at.opt); // copies options on to `at.opt` only if not already taken.
+		obj_map(opt, function each(v,k){
+			if(!obj_has(this, k) || text.is(v) || obj.empty(v)){ this[k] = v ; return }
+			if(v && v.constructor !== Object && !list_is(v)){ return }
+			obj_map(v, each, this[k]);
+		}, at.opt);
 		Gun.on('opt', at);
 		at.opt.uuid = at.opt.uuid || function(){ return state_lex() + text_rand(12) }
 		return gun;
@@ -204,7 +216,7 @@ var obj = Gun.obj, obj_is = obj.is, obj_has = obj.has, obj_to = obj.to, obj_map 
 var state_lex = Gun.state.lex, _soul = Gun.val.link._, _has = '.', node_ = Gun.node._, rel_is = Gun.val.link.is;
 var empty = {}, u;
 
-console.debug = function(i, s){ return (console.debug.i && i === console.debug.i && console.debug.i++) && (console.log.apply(console, arguments) || s) };
+console.only = function(i, s){ return (console.only.i && i === console.only.i && console.only.i++) && (console.log.apply(console, arguments) || s) };
 
 Gun.log = function(){ return (!Gun.log.off && console.log.apply(console, arguments)), [].slice.call(arguments).join(' ') }
 Gun.log.once = function(w,s,o){ return (o = Gun.log.once)[w] = o[w] || 0, o[w]++ || Gun.log(s) }
